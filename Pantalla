@@ -1,0 +1,183 @@
+# pantalla.py  -  Responsable: Sebastián
+# La pantalla del juego: un Canvas que dibuja lo que la lógica le dice.
+# No calcula choques ni puntajes: eso lo hace Juego (logica.py).
+import random
+import tkinter as tk
+from logica import Juego, Jefe, ANCHO, ALTO
+
+FONDO = "#05060f"
+CIAN = "#38e8ff"
+MAGENTA = "#ff3fd8"
+NARANJA = "#ffa63a"
+ROJO = "#ff4b5c"
+AMARILLO = "#ffe45c"
+BLANCO = "#e8f1ff"
+GRIS = "#5b6b8c"
+
+COLOR_ENEMIGO = {"basico": MAGENTA, "zigzag": NARANJA, "jefe": ROJO, "nave": CIAN}
+
+
+class PantallaJuego(tk.Canvas):
+    # Hereda de Canvas: la clase ES el lienzo donde se dibuja el juego.
+    def __init__(self, padre, nombre, al_terminar):
+        super().__init__(padre, width=ANCHO, height=ALTO, bg=FONDO, highlightthickness=0)
+        self.juego = Juego()                # la lógica, en un solo atributo
+        self.nombre = nombre                # dato de ida (llega por el constructor)
+        self.al_terminar = al_terminar      # callback: a quién avisar al perder
+        self.raiz = padre
+        self.teclas = set()
+        self.pausado = False
+        self.cuadros_final = 0
+        self.cuadro = 0           # contador de cuadros dibujados
+        self.temblor = 0
+        self.particulas = []
+        self.estrellas = [[random.randint(0, ANCHO), random.randint(0, ALTO),
+                           random.choice([1, 2, 3])] for _ in range(90)]
+        self.raiz.bind("<KeyPress>", self.tecla_abajo)
+        self.raiz.bind("<KeyRelease>", self.tecla_arriba)
+        self.focus_set()
+        self.bucle()
+
+    # ---------- teclado (eventos y callbacks, clase 10) ----------
+    def tecla_abajo(self, evento):
+        tecla = evento.keysym.lower()
+        if tecla == "escape":
+            self.pausado = not self.pausado
+        self.teclas.add(tecla)
+
+    def tecla_arriba(self, evento):
+        self.teclas.discard(evento.keysym.lower())
+
+    # ---------- el ciclo del juego ----------
+    def bucle(self):
+        self.cuadro += 1
+        if not self.pausado:
+            izquierda = "left" in self.teclas or "a" in self.teclas
+            derecha = "right" in self.teclas or "d" in self.teclas
+            disparando = "space" in self.teclas
+            self.juego.avanzar(izquierda, derecha, disparando)
+            self.leer_eventos()
+            self.mover_particulas()
+        self.dibujar()
+
+        if self.juego.terminado:
+            self.cuadros_final += 1
+            if self.cuadros_final > 70:     # deja ver la explosión antes de cerrar
+                self.terminar()
+                return
+        self.after(16, self.bucle)          # vuelve a llamarse en 16 ms (unos 60 cuadros por segundo)
+
+    def terminar(self):
+        self.raiz.unbind("<KeyPress>")
+        self.raiz.unbind("<KeyRelease>")
+        self.al_terminar(self.nombre, self.juego.puntaje)   # VUELTA por callback
+
+    # ---------- efectos (solo visuales) ----------
+    def leer_eventos(self):
+        for tipo, x, y, quien in self.juego.eventos:
+            color = COLOR_ENEMIGO.get(quien, BLANCO)
+            if tipo == "explosion":
+                cantidad = 60 if quien in ("jefe", "nave") else 22
+                self.explotar(x, y, color, cantidad)
+                self.temblor = 14 if quien in ("jefe", "nave") else 4
+            elif tipo == "impacto":
+                self.explotar(x, y, AMARILLO, 5)
+            elif tipo == "golpe":
+                self.explotar(x, y, CIAN, 18)
+                self.temblor = 10
+
+    def explotar(self, x, y, color, cantidad):
+        for _ in range(cantidad):
+            self.particulas.append([x, y, random.uniform(-5, 5), random.uniform(-5, 5),
+                                    random.randint(18, 38), color])
+
+    def mover_particulas(self):
+        for p in self.particulas:
+            p[0] += p[2]
+            p[1] += p[3]
+            p[2] *= 0.94
+            p[3] *= 0.94
+            p[4] -= 1
+        self.particulas = [p for p in self.particulas if p[4] > 0]
+        for estrella in self.estrellas:
+            estrella[1] += estrella[2]      # las estrellas lejanas van más lento (paralaje)
+            if estrella[1] > ALTO:
+                estrella[0] = random.randint(0, ANCHO)
+                estrella[1] = 0
+
+    # ---------- dibujo ----------
+    def dibujar(self):
+        self.delete("all")
+        for x, y, capa in self.estrellas:
+            color = {1: "#2a3352", 2: "#56658f", 3: "#b9c6ff"}[capa]
+            self.create_rectangle(x, y, x + capa - 1, y + capa * 2, fill=color, outline="")
+
+        for bala in self.juego.balas:
+            color = ROJO if bala.enemiga else AMARILLO
+            self.create_rectangle(bala.x - 2, bala.y - 7, bala.x + 2, bala.y + 7,
+                                  fill=color, outline="")
+
+        for enemigo in self.juego.enemigos:
+            self.dibujar_enemigo(enemigo)
+
+        nave = self.juego.nave
+        parpadeo = nave.invulnerable and (self.cuadro // 4) % 2 == 0
+        if nave.vida > 0 and not parpadeo:
+            self.dibujar_nave(nave.x, nave.y)
+
+        for x, y, _, _, vida, color in self.particulas:
+            r = max(1, vida / 10)
+            self.create_oval(x - r, y - r, x + r, y + r, fill=color, outline="")
+
+        self.dibujar_hud()
+
+        if self.temblor > 0:                # sacudida de pantalla
+            self.move("all", random.randint(-self.temblor, self.temblor),
+                      random.randint(-self.temblor, self.temblor))
+            self.temblor -= 1
+
+        if self.pausado:
+            self.create_text(ANCHO // 2, ALTO // 2, text="PAUSA", fill=CIAN,
+                             font=("Consolas", 40, "bold"))
+            self.create_text(ANCHO // 2, ALTO // 2 + 40, text="Esc para seguir",
+                             fill=GRIS, font=("Consolas", 12))
+
+    def dibujar_nave(self, x, y):
+        llama = random.randint(8, 16)
+        self.create_polygon(x - 7, y + 16, x, y + 16 + llama, x + 7, y + 16,
+                            fill=NARANJA, outline="")
+        self.create_polygon(x, y - 22, x + 18, y + 16, x + 6, y + 10, x - 6, y + 10,
+                            x - 18, y + 16, fill="#0b2a3a", outline=CIAN, width=2)
+        self.create_oval(x - 4, y - 6, x + 4, y + 4, fill=CIAN, outline="")
+    
+
+    def dibujar_enemigo(self, e):
+        color = COLOR_ENEMIGO[e.TIPO]
+        x, y = e.x, e.y
+        if e.TIPO == "basico":
+            self.create_polygon(x - 17, y - 12, x + 17, y - 12, x + 8, y + 4,
+                                x, y + 15, x - 8, y + 4, fill="#2a0a2a",
+                                outline=color, width=2)
+        elif e.TIPO == "zigzag":
+            self.create_polygon(x, y - 15, x + 17, y, x, y + 15, x - 17, y,
+                                fill="#2a1700", outline=color, width=2)
+        else:                               # jefe
+            self.create_polygon(x - 60, y - 20, x + 60, y - 20, x + 45, y + 15,
+                                x + 15, y + 32, x - 15, y + 32, x - 45, y + 15,
+                                fill="#2a0508", outline=color, width=3)
+            self.create_oval(x - 10, y - 8, x + 10, y + 12, fill=color, outline="")
+            ancho = 110 * e.vida / Jefe.VIDA_MAXIMA
+            self.create_rectangle(x - 55, y - 34, x + 55, y - 28, outline=GRIS)
+            self.create_rectangle(x - 55, y - 34, x - 55 + ancho, y - 28, fill=color, outline="")
+        self.create_oval(x - 3, y - 3, x + 3, y + 3, fill=BLANCO, outline="")
+
+    def dibujar_hud(self):
+        self.create_text(16, 16, anchor="nw", text=f"PUNTAJE  {self.juego.puntaje:06d}",
+                         fill=BLANCO, font=("Consolas", 14, "bold"))
+        self.create_text(16, 40, anchor="nw", text=f"SECTOR {self.juego.nivel}",
+                         fill=CIAN, font=("Consolas", 11))
+        self.create_text(ANCHO - 16, 16, anchor="ne", text=self.nombre.upper(),
+                         fill=GRIS, font=("Consolas", 11))
+        for i in range(self.juego.nave.vida):
+            x = ANCHO - 26 - i * 26
+            self.create_polygon(x, 36, x + 9, 52, x - 9, 52, fill=CIAN, outline="")
