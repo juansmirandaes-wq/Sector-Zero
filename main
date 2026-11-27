@@ -1,0 +1,4 @@
+# main.py  -  Punto de entrada del juego. Ejecutar este archivo.
+from ventanas import VentanaPrincipal
+
+VentanaPrincipal().mainloop()
