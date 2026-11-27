@@ -1,0 +1,266 @@
+# logica.py  -  Responsable: Santiago
+# La lógica del juego. Este archivo NO importa tkinter: solo calcula.
+# La pantalla le pregunta qué dibujar; la lógica decide qué pasa.
+import random
+from abc import ABC, abstractmethod
+
+ANCHO = 600
+ALTO = 720
+
+
+class Entidad(ABC):
+    # ABSTRACCIÓN: el molde de todo lo que existe en el juego.
+    # Nadie puede crear una "Entidad" suelta: solo sus hijas.
+    def __init__(self, x, y, ancho, alto, **kwargs):
+        super().__init__(**kwargs)          # cooperativo: sigue la fila del MRO
+        self.x = x                          # (x, y) es el centro del objeto
+        self.y = y
+        self.ancho = ancho
+        self.alto = alto
+        self.activa = True
+
+    @abstractmethod
+    def actualizar(self):                   # contrato: toda hija debe moverse a su manera
+        pass
+
+    def choca_con(self, otra):
+        return (abs(self.x - otra.x) * 2 < self.ancho + otra.ancho and
+                abs(self.y - otra.y) * 2 < self.alto + otra.alto)
+
+
+class Bala(Entidad):
+    def __init__(self, velocidad, enemiga=False, **kwargs):
+        super().__init__(ancho=4, alto=14, **kwargs)
+        self.velocidad = velocidad          # negativa sube, positiva baja
+        self.enemiga = enemiga
+
+    def actualizar(self):
+        self.y += self.velocidad
+        if self.y < -20 or self.y > ALTO + 20:
+            self.activa = False
+
+
+class Nave(Entidad):
+    VIDA_MAXIMA = 3
+    VELOCIDAD = 7
+    ESPERA_DISPARO = 9                      # cuadros entre un disparo y otro
+    TIEMPO_INVULNERABLE = 70                # cuadros sin recibir daño tras un golpe
+
+    def __init__(self):
+        super().__init__(x=ANCHO // 2, y=ALTO - 70, ancho=36, alto=40)
+        self.__vida = Nave.VIDA_MAXIMA      # ENCAPSULAMIENTO: privado
+        self.__espera = 0
+        self.__invulnerable = 0
+        self.direccion = 0                  # -1 izquierda, 0 quieta, 1 derecha
+
+    @property
+    def vida(self):
+        return self.__vida
+
+    @vida.setter
+    def vida(self, nueva):
+        if not isinstance(nueva, int):
+            raise ValueError("La vida debe ser un número entero")
+        self.__vida = max(0, min(nueva, Nave.VIDA_MAXIMA))
+
+    @property
+    def invulnerable(self):                 # propiedad de solo lectura
+        return self.__invulnerable > 0
+
+    def actualizar(self):
+        self.x += self.direccion * Nave.VELOCIDAD
+        self.x = max(self.ancho // 2, min(self.x, ANCHO - self.ancho // 2))
+        if self.__espera > 0:
+            self.__espera -= 1
+        if self.__invulnerable > 0:
+            self.__invulnerable -= 1
+
+    def disparar(self):
+        if self.__espera > 0:
+            return None
+        self.__espera = Nave.ESPERA_DISPARO
+        return Bala(x=self.x, y=self.y - self.alto // 2, velocidad=-12)
+
+    def recibir_dano(self):
+        if self.invulnerable:
+            return False
+        self.vida = self.vida - 1           # pasa por el setter, que valida
+        self.__invulnerable = Nave.TIEMPO_INVULNERABLE
+        return True
+
+
+class Enemigo(Entidad):
+    TIPO = "basico"
+    PUNTOS = 100
+
+    def __init__(self, velocidad, **kwargs):
+        super().__init__(**kwargs)
+        self.velocidad = velocidad
+
+    def actualizar(self):
+        self.y += self.velocidad
+        if self.y > ALTO + 40:
+            self.activa = False
+
+    def recibir_dano(self):                 # un solo golpe lo destruye
+        self.activa = False
+
+
+class EnemigoZigzag(Enemigo):
+    TIPO = "zigzag"
+    PUNTOS = 150
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.paso = 0
+
+    def actualizar(self):                   # SOBRESCRITURA
+        super().actualizar()                # baja como cualquier enemigo...
+        self.paso += 1                      # ...y además se mueve de lado
+        self.x += 3 if (self.paso // 30) % 2 == 0 else -3
+        self.x = max(20, min(self.x, ANCHO - 20))
+
+
+class Disparador(Entidad):
+    # La capacidad de disparar hacia abajo.
+    # Hereda de Entidad igual que Enemigo: por eso Jefe forma un DIAMANTE.
+    def __init__(self, cadencia, **kwargs):
+        super().__init__(**kwargs)
+        self.cadencia = cadencia
+        self.contador = 0
+
+    def intentar_disparar(self):
+        self.contador += 1
+        if self.contador >= self.cadencia:
+            self.contador = 0
+            return Bala(x=self.x, y=self.y + self.alto // 2, velocidad=7, enemiga=True)
+        return None
+
+
+class Jefe(Enemigo, Disparador):
+    # HERENCIA MÚLTIPLE: es enemigo y además dispara.
+    # MRO: Jefe -> Enemigo -> Disparador -> Entidad
+    # Gracias a super() y **kwargs, Entidad se inicializa UNA sola vez.
+    TIPO = "jefe"
+    PUNTOS = 1000
+    VIDA_MAXIMA = 20
+
+    def __init__(self):
+        super().__init__(x=ANCHO // 2, y=-60, ancho=120, alto=64,
+                         velocidad=2, cadencia=40)
+        self.__vida = Jefe.VIDA_MAXIMA
+
+    @property
+    def vida(self):
+        return self.__vida
+
+    def actualizar(self):                   # entra desde arriba y luego va de lado a lado
+        if self.y < 110:
+            self.y += abs(self.velocidad)
+        else:
+            self.x += self.velocidad
+            if self.x < 80 or self.x > ANCHO - 80:
+                self.velocidad = -self.velocidad
+
+    def recibir_dano(self):                 # SOBRESCRITURA: aguanta varios golpes
+        self.__vida -= 1
+        if self.__vida <= 0:
+            self.activa = False
+
+
+class Juego:
+    # Coordina la partida: crea enemigos, revisa choques y lleva el puntaje.
+    def __init__(self):
+        self.nave = Nave()
+        self.balas = []
+        self.enemigos = []
+        self.eventos = []                   # avisos para la pantalla (explosiones)
+        self.terminado = False
+        self.__puntaje = 0
+        self.__cuadro = 0
+        self.__proximo_jefe = 2500
+
+    @property
+    def puntaje(self):                      # solo lectura: nadie lo cambia desde afuera
+        return self.__puntaje
+
+    @property
+    def nivel(self):                        # propiedad calculada
+        return 1 + self.__puntaje // 1500
+
+    def avanzar(self, izquierda, derecha, disparando):
+        # Un "cuadro" del juego. La pantalla lo llama unas 60 veces por segundo.
+        self.eventos.clear()
+        if self.terminado:
+            return
+        self.__cuadro += 1
+        self.nave.direccion = int(derecha) - int(izquierda)
+        if disparando:
+            bala = self.nave.disparar()
+            if bala:
+                self.balas.append(bala)
+        self.__crear_enemigos()
+
+        for entidad in [self.nave] + self.balas + self.enemigos:
+            entidad.actualizar()            # POLIMORFISMO: cada uno se mueve a su manera
+
+        for enemigo in self.enemigos:
+            if isinstance(enemigo, Disparador):
+                bala = enemigo.intentar_disparar()
+                if bala:
+                    self.balas.append(bala)
+
+        self.__revisar_choques()
+        self.balas = [b for b in self.balas if b.activa]
+        self.enemigos = [e for e in self.enemigos if e.activa]
+
+    def __crear_enemigos(self):
+        hay_jefe = any(isinstance(e, Jefe) for e in self.enemigos)
+        if self.__puntaje >= self.__proximo_jefe and not hay_jefe:
+            self.enemigos.append(Jefe())
+            self.eventos.append(("jefe", ANCHO // 2, 0, "jefe"))
+            self.__proximo_jefe += 4000
+            return
+        intervalo = 90 if hay_jefe else max(18, 55 - self.nivel * 6)
+        if self.__cuadro % intervalo != 0:
+            return
+        x = random.randint(30, ANCHO - 30)
+        velocidad = random.uniform(2, 3) + self.nivel * 0.4
+        if random.random() < 0.3:
+            self.enemigos.append(EnemigoZigzag(x=x, y=-30, ancho=34, alto=30, velocidad=velocidad))
+        else:
+            self.enemigos.append(Enemigo(x=x, y=-30, ancho=34, alto=30, velocidad=velocidad))
+
+    def __revisar_choques(self):
+        for bala in self.balas:
+            if not bala.activa:
+                continue
+            if bala.enemiga:
+                if bala.choca_con(self.nave):
+                    bala.activa = False
+                    self.__danar_nave()
+                continue
+            for enemigo in self.enemigos:
+                if enemigo.activa and bala.choca_con(enemigo):
+                    bala.activa = False
+                    enemigo.recibir_dano()  # POLIMORFISMO: básico muere, jefe aguanta
+                    if enemigo.activa:
+                        self.eventos.append(("impacto", bala.x, bala.y, enemigo.TIPO))
+                    else:
+                        self.__puntaje += enemigo.PUNTOS
+                        self.eventos.append(("explosion", enemigo.x, enemigo.y, enemigo.TIPO))
+                    break
+
+        for enemigo in self.enemigos:
+            if enemigo.activa and enemigo.choca_con(self.nave):
+                if not isinstance(enemigo, Jefe):
+                    enemigo.activa = False
+                    self.eventos.append(("explosion", enemigo.x, enemigo.y, enemigo.TIPO))
+                self.__danar_nave()
+
+    def __danar_nave(self):
+        if self.nave.recibir_dano():
+            self.eventos.append(("golpe", self.nave.x, self.nave.y, "nave"))
+            if self.nave.vida == 0:
+                self.terminado = True
+                self.eventos.append(("explosion", self.nave.x, self.nave.y, "nave"))
