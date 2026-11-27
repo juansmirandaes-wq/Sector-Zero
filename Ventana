@@ -1,0 +1,197 @@
+# ventanas.py  -  Responsable: Karen
+# Las ventanas del juego: menú, nombre del piloto, game over y puntajes.
+# Aplica la clase 11: Toplevel, ventanas modales, datos de ida y callback de vuelta.
+import random
+import tkinter as tk
+from tkinter import ttk, messagebox
+from logica import ANCHO, ALTO
+from pantalla import PantallaJuego
+
+FONDO = "#05060f"
+PANEL = "#14204a"
+CIAN = "#38e8ff"
+MAGENTA = "#ff3fd8"
+BLANCO = "#e8f1ff"
+GRIS = "#5b6b8c"
+
+
+def preparar_estilos(raiz):
+    estilo = ttk.Style(raiz)
+    estilo.theme_use("clam")                # el tema "clam" deja cambiar colores
+    estilo.configure("TFrame", background=PANEL)
+    estilo.configure("TLabel", background=PANEL, foreground=BLANCO, font=("Consolas", 11))
+    estilo.configure("Titulo.TLabel", foreground=CIAN, font=("Consolas", 20, "bold"))
+    estilo.configure("TButton", background="#14204a", foreground=BLANCO,
+                     font=("Consolas", 12, "bold"), padding=8, borderwidth=0)
+    estilo.map("TButton", background=[("active", CIAN)], foreground=[("active", FONDO)])
+    estilo.configure("TEntry", fieldbackground=FONDO, foreground=BLANCO, insertcolor=CIAN)
+    estilo.configure("Treeview", background=FONDO, fieldbackground=FONDO,
+                     foreground=BLANCO, font=("Consolas", 11), rowheight=24)
+    estilo.configure("Treeview.Heading", background="#14204a", foreground=CIAN,
+                     font=("Consolas", 11, "bold"))
+
+
+def centrar(ventana, padre):
+    # Ubica una ventana secundaria en el centro de la principal.
+    ventana.update_idletasks()
+    x = padre.winfo_rootx() + (padre.winfo_width() - ventana.winfo_reqwidth()) // 2
+    y = padre.winfo_rooty() + (padre.winfo_height() - ventana.winfo_reqheight()) // 3
+    ventana.geometry(f"+{x}+{y}")
+
+
+class DialogoNombre(tk.Toplevel):
+    # Ventana secundaria MODAL: pide el nombre y lo devuelve por callback.
+    def __init__(self, padre, al_aceptar):
+        super().__init__(padre)
+        self.title("Piloto")
+        self.configure(bg=PANEL)
+        self.resizable(False, False)
+        self.al_aceptar = al_aceptar        # a quién avisar (callback)
+        self.nombre = tk.StringVar()
+
+        marco = ttk.Frame(self, padding=24)
+        marco.pack()
+        ttk.Label(marco, text="IDENTIFÍQUESE, PILOTO", style="Titulo.TLabel").pack(pady=(0, 12))
+        entrada = ttk.Entry(marco, textvariable=self.nombre, font=("Consolas", 14), width=16)
+        entrada.pack(pady=6)
+        ttk.Button(marco, text="DESPEGAR", command=self.aceptar).pack(pady=(12, 0), fill="x")
+        self.bind("<Return>", lambda evento: self.aceptar())
+
+        centrar(self, padre)
+        self.transient(padre)               # encima de la principal
+        self.grab_set()                     # modal: la principal no responde
+        entrada.focus_set()                 # el cursor queda listo para escribir
+
+    def aceptar(self):
+        nombre = self.nombre.get().strip()
+        if not nombre:
+            messagebox.showerror("Dato inválido", "Escriba el nombre del piloto.", parent=self)
+            return                          # sigue abierta
+        if len(nombre) > 12:
+            messagebox.showerror("Dato inválido", "Máximo 12 caracteres.", parent=self)
+            return
+        self.destroy()                      # primero se cierra (suelta el teclado)...
+        self.al_aceptar(nombre)             # ...y luego avisa a la principal
+
+
+class DialogoPuntajes(tk.Toplevel):
+    # Ventana MODAL con la tabla de los mejores puntajes (Treeview, clase 10).
+    def __init__(self, padre, puntajes, titulo="MEJORES PILOTOS"):
+        super().__init__(padre)
+        self.title("Puntajes")
+        self.configure(bg=PANEL)
+        self.resizable(False, False)
+        self.marco = ttk.Frame(self, padding=24)
+        self.marco.pack()
+        ttk.Label(self.marco, text=titulo, style="Titulo.TLabel").pack(pady=(0, 12))
+
+        tabla = ttk.Treeview(self.marco, columns=("pos", "piloto", "puntos"),
+                             show="headings", height=5)
+        for columna, texto, ancho in (("pos", "#", 40), ("piloto", "PILOTO", 150),
+                                      ("puntos", "PUNTOS", 100)):
+            tabla.heading(columna, text=texto)
+            tabla.column(columna, width=ancho, anchor="center")
+        for i, (nombre, puntos) in enumerate(puntajes, start=1):
+            tabla.insert("", "end", values=(i, nombre, puntos))
+        tabla.pack()
+        if not puntajes:
+            ttk.Label(self.marco, text="Aún no hay partidas.").pack(pady=8)
+
+        self.botones = ttk.Frame(self.marco)
+        self.botones.pack(pady=(14, 0), fill="x")
+        self.agregar_botones()
+
+        centrar(self, padre)
+        self.transient(padre)
+        self.grab_set()
+
+    def agregar_botones(self):
+        ttk.Button(self.botones, text="CERRAR", command=self.destroy).pack(fill="x")
+
+
+class DialogoFinal(DialogoPuntajes):
+    # HERENCIA: es la misma tabla de puntajes, pero con el puntaje de la
+    # partida y otros botones. SOBRESCRIBE agregar_botones().
+    def __init__(self, padre, nombre, puntaje, puntajes, al_elegir):
+        self.al_elegir = al_elegir          # callback: "otra" o "menu"
+        super().__init__(padre, puntajes, titulo="GAME OVER")
+        ttk.Label(self.marco, text=f"{nombre}: {puntaje} puntos",
+                  foreground=MAGENTA, font=("Consolas", 14, "bold")).pack(before=self.botones, pady=(10, 0))
+        self.protocol("WM_DELETE_WINDOW", lambda: self.elegir("menu"))
+
+    def agregar_botones(self):
+        ttk.Button(self.botones, text="JUGAR OTRA VEZ",
+                   command=lambda: self.elegir("otra")).pack(fill="x", pady=(0, 6))
+        ttk.Button(self.botones, text="MENÚ", command=lambda: self.elegir("menu")).pack(fill="x")
+
+    def elegir(self, opcion):
+        self.destroy()
+        self.al_elegir(opcion)
+
+
+class VentanaPrincipal(tk.Tk):
+    # La ventana raíz: una sola por programa. Las demás son Toplevel.
+    def __init__(self):
+        super().__init__()
+        self.title("SECTOR ZERO")
+        self.configure(bg=FONDO)
+        self.resizable(False, False)
+        preparar_estilos(self)
+        self.puntajes = []                  # lista de (nombre, puntos)
+        self.ultimo_piloto = ""
+        self.mostrar_menu()
+
+    def limpiar(self):
+        for widget in self.winfo_children():
+            widget.destroy()
+
+    def mostrar_menu(self):
+        self.limpiar()
+        lienzo = tk.Canvas(self, width=ANCHO, height=ALTO, bg=FONDO, highlightthickness=0)
+        lienzo.pack()
+        for _ in range(110):
+            x, y = random.randint(0, ANCHO), random.randint(0, ALTO)
+            tamano = random.choice([1, 1, 2, 3])
+            lienzo.create_rectangle(x, y, x + tamano, y + tamano,
+                                    fill=random.choice(["#2a3352", "#56658f", "#b9c6ff"]), outline="")
+        lienzo.create_text(ANCHO // 2 + 3, 203, text="SECTOR ZERO", fill=MAGENTA,
+                           font=("Consolas", 52, "bold"))
+        lienzo.create_text(ANCHO // 2, 200, text="SECTOR ZERO", fill=CIAN,
+                           font=("Consolas", 52, "bold"))
+        lienzo.create_text(ANCHO // 2, 260, text="POO II · UNITRÓPICO", fill=GRIS,
+                           font=("Consolas", 12))
+        for i, (texto, accion) in enumerate((("JUGAR", self.jugar),
+                                             ("PUNTAJES", self.ver_puntajes),
+                                             ("SALIR", self.salir))):
+            boton = ttk.Button(lienzo, text=texto, command=accion, width=18)
+            lienzo.create_window(ANCHO // 2, 380 + i * 64, window=boton)
+        lienzo.create_text(ANCHO // 2, ALTO - 40,
+                           text="← → o A D para mover · ESPACIO dispara · ESC pausa",
+                           fill=GRIS, font=("Consolas", 10))
+
+    def jugar(self):
+        DialogoNombre(self, al_aceptar=self.iniciar_partida)   # ida: padre y callback
+
+    def iniciar_partida(self, nombre):      # el callback que recibe el nombre
+        self.ultimo_piloto = nombre
+        self.limpiar()
+        PantallaJuego(self, nombre, al_terminar=self.fin_partida).pack()
+
+    def fin_partida(self, nombre, puntaje): # el callback que recibe el puntaje
+        self.puntajes.append((nombre, puntaje))
+        self.puntajes.sort(key=lambda p: p[1], reverse=True)
+        self.puntajes = self.puntajes[:5]
+        DialogoFinal(self, nombre, puntaje, self.puntajes, al_elegir=self.despues_del_final)
+
+    def despues_del_final(self, opcion):
+        if opcion == "otra":
+            self.iniciar_partida(self.ultimo_piloto)
+        else:
+            self.mostrar_menu()
+
+    def ver_puntajes(self):
+        DialogoPuntajes(self, self.puntajes)
+
+    def salir(self):
+        if messagebox.askyesno("Salir", "¿Desea salir de SECTOR ZERO?"):
+            self.destroy()
